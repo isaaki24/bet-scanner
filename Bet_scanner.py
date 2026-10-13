@@ -3,9 +3,10 @@ import requests
 import math
 
 # --- CONFIGURACIÓN DE CREDENCIALES ---
-API_KEY = os.environ.get("ODDS_API_KEY")
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+API_KEY = os.environ.get("0263d119deb33d2831893b185acf7b14")
+TELEGRAM_TOKEN = os.environ.get("8860037934: AAGerJjRrT_AD2yWp918_y5×C
+I8SNj3YPm4")
+CHAT_ID = os.environ.get("5811357869")
 
 BANKROLL_TOTAL = 1000000  
 STAKE_FIXO_PCT = 0.02     
