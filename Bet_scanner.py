@@ -1,6 +1,6 @@
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- CONFIGURACIÓN DE CREDENCIALES ---
 API_KEY = "0263d119deb33d2831893b185acf7b14"
@@ -10,6 +10,8 @@ CHAT_ID = "5811357869"
 BANKROLL_TOTAL = 1000000  
 STAKE_FIXO_PCT = 0.02     
 MIN_EV = 0.03             # 3% mínimo de EV real
+MIN_PROB_REAL = 0.35      # ¡NUEVO! Solo apostar a equipos con al menos 35% de probabilidad real de ganar (evita imposibles)
+MAX_DIAS_FUTURO = 2       # ¡NUEVO! Solo partidos para hoy y los próximos 2 días
 
 SPORTS_TO_SCAN = [
     {"nombre": "Fútbol - Premier League", "key": "soccer_epl"},
@@ -40,16 +42,17 @@ def enviar_alerta_telegram(mensaje):
 def formatear_fecha(fecha_str):
     try:
         dt = datetime.fromisoformat(fecha_str.replace("Z", "+00:00"))
-        return dt.strftime("%d/%m/%Y - %H:%M UTC")
+        return dt.strftime("%d/%m/%Y - %H:%M UTC"), dt
     except:
-        return fecha_str
+        return fecha_str, None
 
 def analizar_mercados():
-    print("[*] Iniciando escaneo por Consenso de Mercado Real (+EV)...")
+    print("[*] Iniciando escaneo filtrado por cercanía y probabilidad real...")
     monto_stake = BANKROLL_TOTAL * STAKE_FIXO_PCT
     
-    # Conjunto para registrar partidos ya alertados en esta ejecución y evitar duplicados
     partidos_procesados = set()
+    ahora = datetime.utcnow()
+    limite_fecha = ahora + timedelta(days=MAX_DIAS_FUTURO)
 
     for deporte in SPORTS_TO_SCAN:
         nombre_deporte = deporte["nombre"]
@@ -68,15 +71,24 @@ def analizar_mercados():
                 if not match_id or match_id in partidos_procesados:
                     continue
 
+                # Validar fecha del partido (solo próximos días)
+                commence_time_str = partido.get('commence_time', '')
+                fecha_formateada, dt_obj = formatear_fecha(commence_time_str)
+                
+                if dt_obj:
+                    # Convertir a naive UTC para comparar de forma segura
+                    dt_naive = dt_obj.replace(tzinfo=None)
+                    if dt_naive > limite_fecha or dt_naive < ahora:
+                        continue # Descartar si pasa de 2 días o si ya empezó
+
                 home_team = partido['home_team']
                 away_team = partido['away_team']
-                fecha_juego = formatear_fecha(partido.get('commence_time', ''))
                 bookmakers = partido.get('bookmakers', [])
                 
                 if not bookmakers:
                     continue
 
-                # 1. Calcular la probabilidad justa de mercado (No-Vig Consensus)
+                # 1. Calcular probabilidad justa de mercado (No-Vig Consensus)
                 prob_acumulada = {}
                 conteo_casas = 0
 
@@ -99,7 +111,7 @@ def analizar_mercados():
 
                 prob_consenso = {sel: prob / conteo_casas for sel, prob in prob_acumulada.items()}
 
-                # 2. Encontrar la MEJOR cuota absoluta para cada selección del partido
+                # 2. Encontrar la MEJOR cuota filtrando por EV y por Probabilidad Real Mínima
                 mejores_opciones = {}
 
                 for bookmaker in bookmakers:
@@ -114,9 +126,9 @@ def analizar_mercados():
                                     p_real = prob_consenso[nombre_sel]
                                     ev = (p_real * cuota_ofrecida) - 1
                                     
-                                    if ev >= MIN_EV:
+                                    # FILTROS CLAVE: EV positivo y Probabilidad Real mayor o igual al 35%
+                                    if ev >= MIN_EV and p_real >= MIN_PROB_REAL:
                                         key_opcion = nombre_sel
-                                        # Guardamos únicamente la cuota más alta encontrada en todo el mercado
                                         if key_opcion not in mejores_opciones or cuota_ofrecida > mejores_opciones[key_opcion]['cuota']:
                                             mejores_opciones[key_opcion] = {
                                                 'seleccion': nombre_sel,
@@ -126,7 +138,7 @@ def analizar_mercados():
                                                 'ev': ev
                                             }
 
-                # 3. CONSOLIDAR Y ENVIAR UNA SOLA VEZ POR PARTIDO
+                # 3. ENVIAR ALERTA CONSOLIDADA SI CUMPLE TODO
                 if mejores_opciones:
                     partidos_procesados.add(match_id)
                     
@@ -144,7 +156,7 @@ def analizar_mercados():
                         f"🚨 *¡OPORTUNIDAD +EV REAL DETECTADA!* 🚨\n\n"
                         f"🏆 *Liga:* {nombre_deporte}\n"
                         f"⚔️ *Encuentro:* {home_team} vs {away_team}\n"
-                        f"📅 *Fecha:* {fecha_juego}\n"
+                        f"📅 *Fecha:* {fecha_formateada}\n"
                         f"💰 *Stake Sugerido:* ${monto_stake:,.0f}\n\n"
                         + "-----------------------------------\n" +
                         "\n-----------------------------------\n".join(lineas_mensaje)
