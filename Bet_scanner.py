@@ -1,5 +1,6 @@
 import os
 import requests
+import csv
 from datetime import datetime, timedelta
 
 # --- CONFIGURACIÓN DE CREDENCIALES ---
@@ -8,10 +9,10 @@ TELEGRAM_TOKEN = "8860037934:AAGerJjRrT_AD2yWp918_y5xCI8SNj3YPm4"
 CHAT_ID = "5811357869"
 
 BANKROLL_TOTAL = 1000000  
-STAKE_FIXO_PCT = 0.02     
-MIN_EV = 0.03             # 3% mínimo de EV real
-MIN_PROB_REAL = 0.35      # ¡NUEVO! Solo apostar a equipos con al menos 35% de probabilidad real de ganar (evita imposibles)
-MAX_DIAS_FUTURO = 2       # ¡NUEVO! Solo partidos para hoy y los próximos 2 días
+MIN_EV = 0.03             
+MIN_PROB_REAL = 0.35      
+MAX_DIAS_FUTURO = 2       
+CSV_FILE = "historial_apuestas.csv"
 
 SPORTS_TO_SCAN = [
     {"nombre": "Fútbol - Premier League", "key": "soccer_epl"},
@@ -39,6 +40,17 @@ def enviar_alerta_telegram(mensaje):
         print(f"Error enviando mensaje: {e}")
         return False
 
+def registrar_en_csv(data_apuesta):
+    file_exists = os.path.isfile(CSV_FILE)
+    try:
+        with open(CSV_FILE, mode='a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(["Fecha_Alerta", "Deporte", "Encuentro", "Seleccion", "Cuota", "Casa", "Prob_Real", "EV", "Stake_Sugerido"])
+            writer.writerow(data_apuesta)
+    except Exception as e:
+        print(f"Error escribiendo en CSV: {e}")
+
 def formatear_fecha(fecha_str):
     try:
         dt = datetime.fromisoformat(fecha_str.replace("Z", "+00:00"))
@@ -46,10 +58,22 @@ def formatear_fecha(fecha_str):
     except:
         return fecha_str, None
 
-def analizar_mercados():
-    print("[*] Iniciando escaneo filtrado por cercanía y probabilidad real...")
-    monto_stake = BANKROLL_TOTAL * STAKE_FIXO_PCT
+def calcular_stake_kelly(prob, cuota, bankroll):
+    # Fórmula de Kelly: f* = (bp - q) / b  donde b = cuota - 1, p = prob, q = 1 - p
+    b = cuota - 1
+    if b <= 0:
+        return bankroll * 0.01
+    kelly_fraction = (b * prob - (1 - prob)) / b
     
+    # Usamos Kelly Fraccional al 25% (0.25) para ser ultraseguros y no arriesgar de más
+    kelly_seguro = kelly_fraction * 0.25
+    
+    # Limitar el stake entre el 1% y el 5% máximo del bankroll por seguridad
+    stake_pct = max(0.01, min(kelly_seguro, 0.05))
+    return bankroll * stake_pct
+
+def analizar_mercados():
+    print("[*] Iniciando escaneo avanzado con Criterio de Kelly y Registro CSV...")
     partidos_procesados = set()
     ahora = datetime.utcnow()
     limite_fecha = ahora + timedelta(days=MAX_DIAS_FUTURO)
@@ -71,15 +95,13 @@ def analizar_mercados():
                 if not match_id or match_id in partidos_procesados:
                     continue
 
-                # Validar fecha del partido (solo próximos días)
                 commence_time_str = partido.get('commence_time', '')
                 fecha_formateada, dt_obj = formatear_fecha(commence_time_str)
                 
                 if dt_obj:
-                    # Convertir a naive UTC para comparar de forma segura
                     dt_naive = dt_obj.replace(tzinfo=None)
                     if dt_naive > limite_fecha or dt_naive < ahora:
-                        continue # Descartar si pasa de 2 días o si ya empezó
+                        continue
 
                 home_team = partido['home_team']
                 away_team = partido['away_team']
@@ -88,7 +110,7 @@ def analizar_mercados():
                 if not bookmakers:
                     continue
 
-                # 1. Calcular probabilidad justa de mercado (No-Vig Consensus)
+                # 1. Consenso de Mercado No-Vig
                 prob_acumulada = {}
                 conteo_casas = 0
 
@@ -110,8 +132,6 @@ def analizar_mercados():
                     continue
 
                 prob_consenso = {sel: prob / conteo_casas for sel, prob in prob_acumulada.items()}
-
-                # 2. Encontrar la MEJOR cuota filtrando por EV y por Probabilidad Real Mínima
                 mejores_opciones = {}
 
                 for bookmaker in bookmakers:
@@ -126,38 +146,52 @@ def analizar_mercados():
                                     p_real = prob_consenso[nombre_sel]
                                     ev = (p_real * cuota_ofrecida) - 1
                                     
-                                    # FILTROS CLAVE: EV positivo y Probabilidad Real mayor o igual al 35%
                                     if ev >= MIN_EV and p_real >= MIN_PROB_REAL:
                                         key_opcion = nombre_sel
                                         if key_opcion not in mejores_opciones or cuota_ofrecida > mejores_opciones[key_opcion]['cuota']:
+                                            # Calcular stake dinámico por Kelly
+                                            monto_stake = calcular_stake_kelly(p_real, cuota_ofrecida, BANKROLL_TOTAL)
                                             mejores_opciones[key_opcion] = {
                                                 'seleccion': nombre_sel,
                                                 'cuota': cuota_ofrecida,
                                                 'casa': casa,
                                                 'prob': p_real,
-                                                'ev': ev
+                                                'ev': ev,
+                                                'stake': monto_stake
                                             }
 
-                # 3. ENVIAR ALERTA CONSOLIDADA SI CUMPLE TODO
                 if mejores_opciones:
                     partidos_procesados.add(match_id)
-                    
                     lineas_mensaje = []
+                    
                     for item in mejores_opciones.values():
                         linea = (
                             f"📌 *Selección:* {item['seleccion']}\n"
                             f"📊 *Mejor Cuota:* {item['cuota']} ({item['casa']})\n"
-                            f"📈 *Prob. Real (Mercado):* {item['prob']*100:.1f}%\n"
+                            f"📈 *Prob. Real:* {item['prob']*100:.1f}%\n"
                             f"💡 *EV Real:* +{item['ev']*100:.2f}%\n"
+                            f"💰 *Stake (Kelly):* ${item['stake']:,.0f}\n"
                         )
                         lineas_mensaje.append(linea)
+                        
+                        # Guardar automáticamente en el CSV histórico
+                        registrar_en_csv([
+                            datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+                            nombre_deporte,
+                            f"{home_team} vs {away_team}",
+                            item['seleccion'],
+                            item['cuota'],
+                            item['casa'],
+                            f"{item['prob']*100:.1f}%",
+                            f"+{item['ev']*100:.2f}%",
+                            f"${item['stake']:,.0f}"
+                        ])
                     
                     mensaje_consolidado = (
                         f"🚨 *¡OPORTUNIDAD +EV REAL DETECTADA!* 🚨\n\n"
                         f"🏆 *Liga:* {nombre_deporte}\n"
                         f"⚔️ *Encuentro:* {home_team} vs {away_team}\n"
-                        f"📅 *Fecha:* {fecha_formateada}\n"
-                        f"💰 *Stake Sugerido:* ${monto_stake:,.0f}\n\n"
+                        f"📅 *Fecha:* {fecha_formateada}\n\n"
                         + "-----------------------------------\n" +
                         "\n-----------------------------------\n".join(lineas_mensaje)
                     )
