@@ -12,7 +12,6 @@ BANKROLL_TOTAL = 1000000
 STAKE_FIXO_PCT = 0.02     
 MIN_EV = 0.03             
 
-# Ligas y mercados múltiples amplios
 SPORTS_TO_SCAN = [
     {"nombre": "Fútbol - Premier League", "key": "soccer_epl", "tipo": "futbol"},
     {"nombre": "Fútbol - La Liga", "key": "soccer_spain_la_liga", "tipo": "futbol"},
@@ -60,16 +59,16 @@ def simular_partido_futbol(lambda_home, lambda_away, max_goles=6):
                 prob_away_win += p_marcador
                 
             if (h + a) > 2.5:
-                prob_over_2.5 += p_marcador
+                prob_over_2_5 += p_marcador
             else:
-                prob_under_2.5 += p_marcador
+                prob_under_2_5 += p_marcador
                 
     return {
         "Home": prob_home_win, 
         "Draw": prob_draw, 
         "Away": prob_away_win,
-        "Over_2.5": prob_over_2.5,
-        "Under_2.5": prob_under_2.5
+        "Over_2.5": prob_over_2_5,
+        "Under_2.5": prob_under_2_5
     }
 
 def formatear_fecha(fecha_str):
@@ -80,10 +79,8 @@ def formatear_fecha(fecha_str):
         return fecha_str
 
 def analizar_mercados():
-    print("[*] Iniciando escaneo avanzado multideporte y multimercado...")
+    print("[*] Iniciando escaneo optimizado...")
     monto_stake = BANKROLL_TOTAL * STAKE_FIXO_PCT
-
-    # Solicitamos múltiples mercados clave a la vez (h2h = ganador, totals = over/under)
     mercados_solicitados = "h2h,totals"
 
     for deporte in SPORTS_TO_SCAN:
@@ -104,11 +101,11 @@ def analizar_mercados():
                 away_team = partido['away_team']
                 fecha_juego = formatear_fecha(partido.get('commence_time', ''))
                 
-                # Lista para acumular las apuestas +EV de este partido específico y mandar un solo mensaje
-                oportunidades_partido = []
+                # Diccionario para almacenar ÚNICAMENTE la mejor opción por selección
+                # Estructura: clave_seleccion -> dict(cuota, casa, prob, ev, mercado_nombre)
+                mejores_opciones = {}
 
                 if tipo == "futbol":
-                    # Estimación de medias ofensivas/defensivas basadas en Poisson
                     lambda_home, lambda_away = 1.55, 1.15
                     modelo_res = simular_partido_futbol(lambda_home, lambda_away)
                     
@@ -117,7 +114,6 @@ def analizar_mercados():
                         for market in bookmaker.get('markets', []):
                             m_key = market['key']
                             
-                            # Mercado Ganador (1X2)
                             if m_key == 'h2h':
                                 for outcome in market['outcomes']:
                                     nombre = outcome['name']
@@ -132,66 +128,81 @@ def analizar_mercados():
                                         
                                     ev = (prob * cuota) - 1
                                     if ev >= MIN_EV:
-                                        oportunidades_partido.append(
-                                            f"🎯 *Mercado:* Ganador (1X2)\n"
-                                            f"📌 *Apuesta:* {nombre}\n"
-                                            f"📊 *Cuota ({casa}):* {cuota} | *Prob. Modelo:* {prob*100:.1f}%\n"
-                                            f"💡 *EV:* +{ev*100:.2f}%\n"
-                                        )
+                                        key_opcion = f"1X2_{nombre}"
+                                        # Guardar solo si es la cuota más alta encontrada para esta selección
+                                        if key_opcion not in mejores_opciones or cuota > mejores_opciones[key_opcion]['cuota']:
+                                            mejores_opciones[key_opcion] = {
+                                                'mercado': 'Ganador (1X2)',
+                                                'seleccion': nombre,
+                                                'cuota': cuota,
+                                                'casa': casa,
+                                                'prob': prob,
+                                                'ev': ev
+                                            }
                             
-                            # Mercado Totales (Over / Under 2.5 goles)
                             elif m_key == 'totals':
                                 for outcome in market['outcomes']:
                                     punto = outcome.get('point', 2.5)
                                     if punto == 2.5:
-                                        nombre = outcome['name'] # Over o Under
+                                        nombre = outcome['name']
                                         cuota = outcome['price']
-                                        
                                         prob = modelo_res["Over_2.5"] if "Over" in nombre else modelo_res["Under_2.5"]
                                         ev = (prob * cuota) - 1
                                         
                                         if ev >= MIN_EV:
-                                            oportunidades_partido.append(
-                                                f"🎯 *Mercado:* Goles Totales ({punto})\n"
-                                                f"📌 *Apuesta:* {nombre} 2.5\n"
-                                                f"📊 *Cuota ({casa}):* {cuota} | *Prob. Modelo:* {prob*100:.1f}%\n"
-                                                f"💡 *EV:* +{ev*100:.2f}%\n"
-                                            )
+                                            key_opcion = f"TOTALS_{nombre}_2.5"
+                                            if key_opcion not in mejores_opciones or cuota > mejores_opciones[key_opcion]['cuota']:
+                                                mejores_opciones[key_opcion] = {
+                                                    'mercado': f'Goles Totales ({punto})',
+                                                    'seleccion': f'{nombre} 2.5',
+                                                    'cuota': cuota,
+                                                    'casa': casa,
+                                                    'prob': prob,
+                                                    'ev': ev
+                                                }
                 else:
-                    # Deportes USA y Esports (2 vías: H2H)
                     for bookmaker in partido.get('bookmakers', []):
                         casa = bookmaker.get('title', 'Bookmaker')
                         for market in bookmaker.get('markets', []):
                             if market['key'] == 'h2h':
                                 outcomes = market['outcomes']
                                 if len(outcomes) == 2:
-                                    # Probabilidad estimada implícita por media de cuotas de mercado (fair odds)
                                     p1 = 1 / outcomes[0]['price']
                                     p2 = 1 / outcomes[1]['price']
                                     vig_total = p1 + p2
-                                    # Probabilidad real ajustada sin margen de casa (vig-free)
                                     fair_p1 = p1 / vig_total
                                     fair_p2 = p2 / vig_total
                                     
-                                    # Evaluamos si hay discrepancia de valor en alguna de las dos selecciones
                                     for idx, outcome in enumerate(outcomes):
                                         cuota = outcome['price']
                                         prob_real = fair_p1 if idx == 0 else fair_p2
-                                        
-                                        # Añadimos un pequeño margen analítico de detección de valor
                                         ev = (prob_real * cuota) - 1
+                                        
                                         if ev >= MIN_EV:
-                                            oportunidades_partido.append(
-                                                f"🎯 *Mercado:* Ganador (2-Way)\n"
-                                                f"📌 *Apuesta:* {outcome['name']}\n"
-                                                f"📊 *Cuota ({casa}):* {cuota} | *Prob. Estimada:* {prob_real*100:.1f}%\n"
-                                                f"💡 *EV:* +{ev*100:.2f}%\n"
-                                            )
+                                            nombre = outcome['name']
+                                            key_opcion = f"H2H_{nombre}"
+                                            if key_opcion not in mejores_opciones or cuota > mejores_opciones[key_opcion]['cuota']:
+                                                mejores_opciones[key_opcion] = {
+                                                    'mercado': 'Ganador (2-Way)',
+                                                    'seleccion': nombre,
+                                                    'cuota': cuota,
+                                                    'casa': casa,
+                                                    'prob': prob_real,
+                                                    'ev': ev
+                                                }
 
-                # Si encontramos oportunidades en este partido, las unimos en UN SOLO mensaje limpio
-                if oportunidades_partido:
-                    # Limpiamos duplicados exactos si hay varias casas ofreciendo lo mismo
-                    oportunidades_unicas = list(set(oportunidades_partido))
+                # Si existen apuestas con valor positivo, consolidar en un único mensaje
+                if mejores_opciones:
+                    lineas_mensaje = []
+                    for item in mejores_opciones.values():
+                        linea = (
+                            f"🎯 *Mercado:* {item['mercado']}\n"
+                            f"📌 *Apuesta:* {item['seleccion']}\n"
+                            f"📊 *Mejor Cuota:* {item['cuota']} ({item['casa']})\n"
+                            f"📈 *Prob. Modelo:* {item['prob']*100:.1f}%\n"
+                            f"💡 *EV:* +{item['ev']*100:.2f}%\n"
+                        )
+                        lineas_mensaje.append(linea)
                     
                     mensaje_consolidado = (
                         f"🚨 *¡OPORTUNIDAD +EV DETECTADA!* 🚨\n\n"
@@ -200,7 +211,7 @@ def analizar_mercados():
                         f"📅 *Fecha:* {fecha_juego}\n"
                         f"💰 *Stake Sugerido:* ${monto_stake:,.0f}\n\n"
                         + "-----------------------------------\n" +
-                        "\n-----------------------------------\n".join(oportunidades_unicas[:3]) # Máximo 3 opciones clave
+                        "\n-----------------------------------\n".join(lineas_mensaje)
                     )
                     enviar_alerta_telegram(mensaje_consolidado)
 
