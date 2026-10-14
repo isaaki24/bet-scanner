@@ -47,6 +47,9 @@ def formatear_fecha(fecha_str):
 def analizar_mercados():
     print("[*] Iniciando escaneo por Consenso de Mercado Real (+EV)...")
     monto_stake = BANKROLL_TOTAL * STAKE_FIXO_PCT
+    
+    # Conjunto para registrar partidos ya alertados en esta ejecución y evitar duplicados
+    partidos_procesados = set()
 
     for deporte in SPORTS_TO_SCAN:
         nombre_deporte = deporte["nombre"]
@@ -61,6 +64,10 @@ def analizar_mercados():
             
             partidos = res.json()
             for partido in partidos:
+                match_id = partido.get('id')
+                if not match_id or match_id in partidos_procesados:
+                    continue
+
                 home_team = partido['home_team']
                 away_team = partido['away_team']
                 fecha_juego = formatear_fecha(partido.get('commence_time', ''))
@@ -92,7 +99,7 @@ def analizar_mercados():
 
                 prob_consenso = {sel: prob / conteo_casas for sel, prob in prob_acumulada.items()}
 
-                # 2. Diccionario para asegurar una única opción óptima por selección en este partido
+                # 2. Encontrar la MEJOR cuota absoluta para cada selección del partido
                 mejores_opciones = {}
 
                 for bookmaker in bookmakers:
@@ -109,8 +116,8 @@ def analizar_mercados():
                                     
                                     if ev >= MIN_EV:
                                         key_opcion = nombre_sel
-                                        # Guardamos únicamente la cuota más alta encontrada para esta selección
-                                        if key_opcion not in mejores_opciones or cuota_ofregida > mejores_opciones[key_opcion]['cuota']:
+                                        # Guardamos únicamente la cuota más alta encontrada en todo el mercado
+                                        if key_opcion not in mejores_opciones or cuota_ofrecida > mejores_opciones[key_opcion]['cuota']:
                                             mejores_opciones[key_opcion] = {
                                                 'seleccion': nombre_sel,
                                                 'cuota': cuota_ofrecida,
@@ -119,8 +126,10 @@ def analizar_mercados():
                                                 'ev': ev
                                             }
 
-                # 3. CONSOLIDACIÓN ABSOLUTA: Un solo mensaje por partido al terminar de revisar todas las casas
+                # 3. CONSOLIDAR Y ENVIAR UNA SOLA VEZ POR PARTIDO
                 if mejores_opciones:
+                    partidos_procesados.add(match_id)
+                    
                     lineas_mensaje = []
                     for item in mejores_opciones.values():
                         linea = (
@@ -141,7 +150,6 @@ def analizar_mercados():
                         "\n-----------------------------------\n".join(lineas_mensaje)
                     )
                     
-                    # Envío único garantizado fuera de los bucles de casas de apuestas
                     enviar_alerta_telegram(mensaje_consolidado)
 
         except Exception as e:
