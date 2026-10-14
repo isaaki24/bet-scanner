@@ -69,8 +69,7 @@ def analizar_mercados():
                 if not bookmakers:
                     continue
 
-                # PASO 1: Calcular la probabilidad justa de mercado (Fair Odds / No-Vig Consensus)
-                # Recopilamos las probabilidades sin margen de todas las casas para sacar un promedio global real.
+                # 1. Calcular la probabilidad justa de mercado (No-Vig Consensus)
                 prob_acumulada = {}
                 conteo_casas = 0
 
@@ -78,12 +77,10 @@ def analizar_mercados():
                     for market in bookmaker.get('markets', []):
                         if market['key'] == 'h2h':
                             outcomes = market['outcomes']
-                            # Calculamos la suma de inversas (el margen de la casa)
                             suma_inversas = sum(1 / o['price'] for o in outcomes if o['price'] > 1)
                             if suma_inversas > 0:
                                 for o in outcomes:
                                     nombre_sel = o['name']
-                                    # Probabilidad sin el margen (vig) de esta casa específica
                                     prob_novig = (1 / o['price']) / suma_inversas
                                     if nombre_sel not in prob_acumulada:
                                         prob_acumulada[nombre_sel] = 0.0
@@ -93,10 +90,9 @@ def analizar_mercados():
                 if conteo_casas == 0:
                     continue
 
-                # Probabilidad de consenso real del mercado global
                 prob_consenso = {sel: prob / conteo_casas for sel, prob in prob_acumulada.items()}
 
-                # PASO 2: Buscar discrepancias (Value Betting) comparando cada casa contra el consenso
+                # 2. Diccionario para asegurar una única opción óptima por selección en este partido
                 mejores_opciones = {}
 
                 for bookmaker in bookmakers:
@@ -109,13 +105,12 @@ def analizar_mercados():
                                 
                                 if nombre_sel in prob_consenso:
                                     p_real = prob_consenso[nombre_sel]
-                                    # EV = (Probabilidad Real del Mercado * Cuota Ofrecida por la Casa) - 1
                                     ev = (p_real * cuota_ofrecida) - 1
                                     
                                     if ev >= MIN_EV:
-                                        key_opcion = f"H2H_{nombre_sel}"
-                                        # Guardamos la mejor cuota disponible para esta selección
-                                        if key_opcion not in mejores_opciones or cuota_ofrecida > mejores_opciones[key_opcion]['cuota']:
+                                        key_opcion = nombre_sel
+                                        # Guardamos únicamente la cuota más alta encontrada para esta selección
+                                        if key_opcion not in mejores_opciones or cuota_ofregida > mejores_opciones[key_opcion]['cuota']:
                                             mejores_opciones[key_opcion] = {
                                                 'seleccion': nombre_sel,
                                                 'cuota': cuota_ofrecida,
@@ -124,7 +119,7 @@ def analizar_mercados():
                                                 'ev': ev
                                             }
 
-                # PASO 3: Consolidar y enviar un único mensaje limpio por partido si hay valor real
+                # 3. CONSOLIDACIÓN ABSOLUTA: Un solo mensaje por partido al terminar de revisar todas las casas
                 if mejores_opciones:
                     lineas_mensaje = []
                     for item in mejores_opciones.values():
@@ -145,6 +140,8 @@ def analizar_mercados():
                         + "-----------------------------------\n" +
                         "\n-----------------------------------\n".join(lineas_mensaje)
                     )
+                    
+                    # Envío único garantizado fuera de los bucles de casas de apuestas
                     enviar_alerta_telegram(mensaje_consolidado)
 
         except Exception as e:
