@@ -11,7 +11,7 @@ BANKROLL_TOTAL = 1000000
 STAKE_FIXO_PCT = 0.02     
 MIN_EV = 0.03             
 
-# Lista completa de deportes y ligas a escanear en cada ejecución
+# Lista completa incluyendo Fútbol, Deportes USA y Esports
 SPORTS_TO_SCAN = [
     # Top Ligas Europeas
     {"nombre": "Fútbol - Premier League", "key": "soccer_epl", "tipo": "futbol"},
@@ -30,9 +30,13 @@ SPORTS_TO_SCAN = [
     {"nombre": "Fútbol - Liga Argentina", "key": "soccer_argentina_primera_division", "tipo": "futbol"},
     {"nombre": "Fútbol - Liga Colombiana", "key": "soccer_colombia_liga_dimayor", "tipo": "futbol"},
     
-    # Deportes Estadounidenses
+    # Deportes Tradicionales USA
     {"nombre": "Baloncesto - NBA", "key": "basketball_nba", "tipo": "general"},
-    {"nombre": "NFL", "key": "americanfootball_nfl", "tipo": "general"}
+    {"nombre": "NFL", "key": "americanfootball_nfl", "tipo": "general"},
+    
+    # Esports (Valorant y LoL)
+    {"nombre": "Esports - League of Legends", "key": "esports_lol", "tipo": "general"},
+    {"nombre": "Esports - Valorant", "key": "esports_valorant", "tipo": "general"}
 ]
 
 def enviar_alerta_telegram(mensaje):
@@ -64,7 +68,7 @@ def simular_partido_futbol(lambda_home, lambda_away, max_goles=10):
     return {"Home": prob_home_win, "Draw": prob_draw, "Away": prob_away_win}
 
 def analizar_mercados():
-    print("[*] Iniciando escaneo multideporte y multiliga...")
+    print("[*] Iniciando escaneo multideporte, multiliga y esports...")
     monto_stake = BANKROLL_TOTAL * STAKE_FIXO_PCT
 
     for deporte in SPORTS_TO_SCAN:
@@ -77,7 +81,7 @@ def analizar_mercados():
         try:
             res = requests.get(url)
             if res.status_code != 200:
-                print(f"[-] No hay eventos disponibles o no se pudo consultar {nombre_deporte}: Código {res.status_code}")
+                print(f"[-] Sin eventos activos para {nombre_deporte}: Código {res.status_code}")
                 continue
             
             partidos = res.json()
