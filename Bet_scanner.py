@@ -14,7 +14,7 @@ MIN_EV = 0.03
 MIN_PROB_REAL = 0.35      
 MAX_DIAS_FUTURO = 2       
 MAX_ODDS_AGE_SECONDS = 300  # Vigencia máxima de cuota (5 minutos)
-MIN_BOOKMAKERS_FOR_CONSENSUS = 3 # Mínimo de casas para un consenso fiable
+MIN_BOOKMAKERS_FOR_CONSENSUS = 3 
 CSV_FILE = "historial_apuestas.csv"
 
 SPORTS_TO_SCAN = [
@@ -45,6 +45,21 @@ def enviar_alerta_telegram(mensaje):
         print(f"Error enviando mensaje a Telegram: {e}")
         return False
 
+def obtener_claves_registradas():
+    """Lee el CSV histórico para no repetir alertas previamente enviadas."""
+    claves = set()
+    if os.path.isfile(CSV_FILE):
+        try:
+            with open(CSV_FILE, mode='r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                header = next(reader, None)
+                for row in reader:
+                    if row and len(row) >= 12:
+                        claves.add(row[11]) # Columna de Signal_Key
+        except Exception as e:
+            print(f"Error leyendo CSV de claves: {e}")
+    return claves
+
 def registrar_en_csv(data_apuesta):
     file_exists = os.path.isfile(CSV_FILE)
     try:
@@ -61,7 +76,6 @@ def registrar_en_csv(data_apuesta):
         print(f"Error escribiendo en CSV: {e}")
 
 def calcular_stake_kelly(prob, cuota, bankroll):
-    """Calcula el Criterio de Kelly Fraccional sin forzar mínimos si no hay ventaja real."""
     if prob <= 0 or cuota <= 1:
         return 0.0
     
@@ -72,18 +86,17 @@ def calcular_stake_kelly(prob, cuota, bankroll):
     if kelly_raw <= 0:
         return 0.0
         
-    # Kelly fraccional conservador al 10% (0.10) para paper trading
     kelly_seguro = kelly_raw * 0.10
-    
-    # Exposición máxima estricta del 0.5% del bankroll por señal
     stake_pct = min(kelly_seguro, 0.005)
     return bankroll * stake_pct
 
 def analizar_mercados():
-    print("[*] Iniciando escaneo profesional riguroso (No-Vig, Expiración y Kelly limpio)...")
-    partidos_procesados = set()
+    print("[*] Iniciando escaneo con deduplicación persistente por CSV...")
     ahora_utc = datetime.utcnow()
     limite_fecha = ahora_utc + timedelta(days=MAX_DIAS_FUTURO)
+    
+    # Cargar las claves de señales ya enviadas en ejecuciones anteriores
+    claves_enviadas = obtener_claves_registradas()
 
     mercados_api = "h2h,spreads,totals"
 
@@ -96,13 +109,12 @@ def analizar_mercados():
         try:
             res = requests.get(url, timeout=15)
             if res.status_code != 200:
-                print(f"[-] Error HTTP {res.status_code} en {nombre_deporte}")
                 continue
             
             partidos = res.json()
             for partido in partidos:
                 match_id = partido.get('id')
-                if not match_id or match_id in partidos_procesados:
+                if not match_id:
                     continue
 
                 commence_time_str = partido.get('commence_time', '')
@@ -121,8 +133,6 @@ def analizar_mercados():
                 if len(bookmakers) < MIN_BOOKMAKERS_FOR_CONSENSUS:
                     continue
 
-                # 1. Agrupar mercados rigurosamente por tipo y línea exacta (Evita mezclar líneas)
-                # Estructura: mercados_agrupados[sub_id][bookmaker_key] = [outcomes con sus precios]
                 mercados_agrupados = {}
 
                 for bookmaker in bookmakers:
@@ -133,10 +143,9 @@ def analizar_mercados():
                         
                         for o in outcomes:
                             price = o.get('price', 0)
-                            if price <= 1.0: # Rechazar cuotas inválidas
+                            if price <= 1.0:
                                 continue
                                 
-                            # Identificador único de sub-mercado incluyendo la línea (ej: spreads_-3.5, totals_2.5, h2h)
                             sub_id = m_key
                             if 'point' in o:
                                 sub_id = f"{m_key}_{o['point']}"
@@ -154,23 +163,19 @@ def analizar_mercados():
 
                 mejores_opciones = {}
 
-                # 2. Procesar cada sub-mercado aplicando Leave-One-Book-Out (Excluir la casa evaluada)
                 for sub_id, books_dict in mercados_agrupados.items():
-                    # Validar que suficientes casas tengan este mercado completo
                     valid_books = {b_key: outcomes for b_key, outcomes in books_dict.items() if len(outcomes) >= 2}
                     if len(valid_books) < MIN_BOOKMAKERS_FOR_CONSENSUS:
                         continue
 
                     for eval_book_key, eval_outcomes in valid_books.items():
-                        # Consenso Leave-One-Book-Out: Calcular probabilidad sumando todas las *otras* casas
                         prob_acumulada = {}
                         conteo_casas = 0
 
                         for b_key, outcomes in valid_books.items():
                             if b_key == eval_book_key:
-                                continue # Excluir la casa evaluada de su propia referencia
+                                continue
                             
-                            # Calcular suma de inversas (overround) para desmarcar
                             suma_inversas = sum(1.0 / o['price'] for o in outcomes)
                             if suma_inversas <= 0:
                                 continue
@@ -186,40 +191,36 @@ def analizar_mercados():
                         if conteo_casas == 0:
                             continue
 
-                        # Probabilidad de consenso sin margen de las demás casas
                         consenso_prob = {sel: prob / conteo_casas for sel, prob in prob_acumulada.items()}
 
-                        # Evaluar las cuotas de la casa evaluada frente al consenso externo
                         for o in eval_outcomes:
                             sel_key = f"{o['name']}_{o.get('point', '')}"
                             cuota_ofrecida = o['price']
                             
                             if sel_key in consenso_prob:
                                 p_estimada = consenso_prob[sel_key]
-                                
-                                # Cálculo correcto del Expected Value (EV)
                                 ev = (p_estimada * cuota_ofrecida) - 1.0
 
-                                # Aplicar filtros estrictos de calidad
                                 if ev >= MIN_EV and p_estimada >= MIN_PROB_REAL:
-                                    key_opcion = f"{sub_id}_{sel_key}"
+                                    # Generar Signal Key DETERMINISTA (Sin tiempo, solo evento+mercado+cuota)
+                                    raw_signal_string = f"{match_id}|{sub_id}|{sel_key}|{eval_book_key}|{cuota_ofrecida:.3f}"
+                                    signal_key = hashlib.sha256(raw_signal_string.encode()).hexdigest()
+
+                                    # DEDUPLICACIÓN CLAVE: Si ya fue alertada previamente en el CSV, OMITIR
+                                    if signal_key in claves_enviadas:
+                                        continue
+
+                                    stake = calcular_stake_kelly(p_estimada, cuota_ofrecida, BANKROLL_TOTAL)
                                     
-                                    # Mantener la mejor cuota disponible para esa selección
-                                    if key_opcion not in mejores_opciones or cuota_ofrecida > mejores_opciones[key_opcion]['cuota']:
-                                        stake = calcular_stake_kelly(p_estimada, cuota_ofrecida, BANKROLL_TOTAL)
-                                        
-                                        if stake > 0: # Solo si Kelly aprueba exposición real
-                                            nombre_mercado = "Ganador (1X2 / H2H)"
-                                            if "spreads" in sub_id:
-                                                nombre_mercado = f"Hándicap (Spread {o.get('point', '')})"
-                                            elif "totals" in sub_id:
-                                                nombre_mercado = f"Totales (Over/Under {o.get('point', '')})"
+                                    if stake > 0:
+                                        nombre_mercado = "Ganador (1X2 / H2H)"
+                                        if "spreads" in sub_id:
+                                            nombre_mercado = f"Hándicap (Spread {o.get('point', '')})"
+                                        elif "totals" in sub_id:
+                                            nombre_mercado = f"Totales (Over/Under {o.get('point', '')})"
 
-                                            # Generar llave de deduplicación determinista (SHA-256)
-                                            time_bucket = ahora_utc.strftime("%Y%m%d%H%M")
-                                            raw_signal_string = f"{match_id}|{sub_id}|{sel_key}|{eval_book_key}|{cuota_ofrecida:.3f}|{time_bucket}"
-                                            signal_key = hashlib.sha256(raw_signal_string.encode()).hexdigest()
-
+                                        key_opcion = f"{sub_id}_{sel_key}"
+                                        if key_opcion not in mejores_opciones or cuota_ofrecida > mejores_opciones[key_opcion]['cuota']:
                                             mejores_opciones[key_opcion] = {
                                                 'mercado': nombre_mercado,
                                                 'seleccion': o['name'],
@@ -233,9 +234,7 @@ def analizar_mercados():
                                                 'expiracion': ahora_utc + timedelta(seconds=MAX_ODDS_AGE_SECONDS)
                                             }
 
-                # 3. Consolidar y emitir alerta única si hay oportunidades válidas
                 if mejores_opciones:
-                    partidos_procesados.add(match_id)
                     lineas_mensaje = []
                     
                     for item in mejores_opciones.values():
@@ -250,7 +249,7 @@ def analizar_mercados():
                         )
                         lineas_mensaje.append(linea)
                         
-                        # Registrar en CSV histórico con control de vigencia y clave única
+                        # Registrar en CSV para bloquear repeticiones futuras
                         registrar_en_csv([
                             item['captura'].strftime("%Y-%m-%d %H:%M:%S"),
                             item['expiracion'].strftime("%Y-%m-%d %H:%M:%S"),
@@ -265,6 +264,9 @@ def analizar_mercados():
                             f"${item['stake']:,.0f}",
                             item['signal_key']
                         ])
+                        
+                        # Agregar la nueva clave a memoria local para la misma ejecución
+                        claves_enviadas.add(item['signal_key'])
                     
                     mensaje_consolidado = (
                         f"🚨 <b>¡OPORTUNIDAD +EV RIGUROSA DETECTADA!</b> 🚨\n\n"
