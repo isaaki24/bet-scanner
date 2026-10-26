@@ -10,13 +10,14 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8860037934:AAGerJjRrT_AD2yWp918_y5
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "5811357869")
 
 BANKROLL_TOTAL = 1000000  
-MIN_EV = 0.03             
+MIN_EV = 0.025            # Ajustado al 2.5% para mayor dinamismo
 MIN_PROB_REAL = 0.35      
 MAX_DIAS_FUTURO = 2       
-MAX_ODDS_AGE_SECONDS = 300  # Vigencia máxima de cuota (5 minutos)
+MAX_ODDS_AGE_SECONDS = 300  
 MIN_BOOKMAKERS_FOR_CONSENSUS = 3 
 CSV_FILE = "historial_apuestas.csv"
 
+# Ligas ampliadas con mayor volumen de partidos y mercados múltiples
 SPORTS_TO_SCAN = [
     {"nombre": "Fútbol - Premier League", "key": "soccer_epl"},
     {"nombre": "Fútbol - La Liga", "key": "soccer_spain_la_liga"},
@@ -27,6 +28,12 @@ SPORTS_TO_SCAN = [
     {"nombre": "Fútbol - Copa Sudamericana", "key": "soccer_conmebol_copa_sudamericana"},
     {"nombre": "Fútbol - Liga Argentina", "key": "soccer_argentina_primera_division"},
     {"nombre": "Fútbol - Liga Colombiana", "key": "soccer_colombia_liga_dimayor"},
+    # Nuevas ligas agregadas para más volumen:
+    {"nombre": "Fútbol - Liga MX (México)", "key": "soccer_mexico_ligamx"},
+    {"nombre": "Fútbol - Brasileirão (Brasil)", "key": "soccer_brazil_campeonato"},
+    {"nombre": "Fútbol - Eredivisie (Países Bajos)", "key": "soccer_netherlands_eredivisie"},
+    {"nombre": "Fútbol - Primeira Liga (Portugal)", "key": "soccer_portugal_primeira_liga"},
+    {"nombre": "Fútbol - Süper Lig (Turquía)", "key": "soccer_turkey_super_league"},
     {"nombre": "Baloncesto - NBA", "key": "basketball_nba"},
     {"nombre": "NFL", "key": "americanfootball_nfl"},
     {"nombre": "Esports - League of Legends", "key": "esports_lol"},
@@ -46,7 +53,6 @@ def enviar_alerta_telegram(mensaje):
         return False
 
 def obtener_claves_registradas():
-    """Lee el CSV histórico para no repetir alertas previamente enviadas."""
     claves = set()
     if os.path.isfile(CSV_FILE):
         try:
@@ -55,7 +61,7 @@ def obtener_claves_registradas():
                 header = next(reader, None)
                 for row in reader:
                     if row and len(row) >= 12:
-                        claves.add(row[11]) # Columna de Signal_Key
+                        claves.add(row[11])
         except Exception as e:
             print(f"Error leyendo CSV de claves: {e}")
     return claves
@@ -91,13 +97,11 @@ def calcular_stake_kelly(prob, cuota, bankroll):
     return bankroll * stake_pct
 
 def analizar_mercados():
-    print("[*] Iniciando escaneo con deduplicación persistente por CSV...")
+    print("[*] Iniciando escaneo ampliado con EV al 2.5% y nuevas ligas...")
     ahora_utc = datetime.utcnow()
     limite_fecha = ahora_utc + timedelta(days=MAX_DIAS_FUTURO)
     
-    # Cargar las claves de señales ya enviadas en ejecuciones anteriores
     claves_enviadas = obtener_claves_registradas()
-
     mercados_api = "h2h,spreads,totals"
 
     for deporte in SPORTS_TO_SCAN:
@@ -202,11 +206,9 @@ def analizar_mercados():
                                 ev = (p_estimada * cuota_ofrecida) - 1.0
 
                                 if ev >= MIN_EV and p_estimada >= MIN_PROB_REAL:
-                                    # Generar Signal Key DETERMINISTA (Sin tiempo, solo evento+mercado+cuota)
                                     raw_signal_string = f"{match_id}|{sub_id}|{sel_key}|{eval_book_key}|{cuota_ofrecida:.3f}"
                                     signal_key = hashlib.sha256(raw_signal_string.encode()).hexdigest()
 
-                                    # DEDUPLICACIÓN CLAVE: Si ya fue alertada previamente en el CSV, OMITIR
                                     if signal_key in claves_enviadas:
                                         continue
 
@@ -249,7 +251,6 @@ def analizar_mercados():
                         )
                         lineas_mensaje.append(linea)
                         
-                        # Registrar en CSV para bloquear repeticiones futuras
                         registrar_en_csv([
                             item['captura'].strftime("%Y-%m-%d %H:%M:%S"),
                             item['expiracion'].strftime("%Y-%m-%d %H:%M:%S"),
@@ -265,7 +266,6 @@ def analizar_mercados():
                             item['signal_key']
                         ])
                         
-                        # Agregar la nueva clave a memoria local para la misma ejecución
                         claves_enviadas.add(item['signal_key'])
                     
                     mensaje_consolidado = (
