@@ -1,36 +1,11 @@
-name: Bot Escáner de Apuestas
-
-on:
-  schedule:
-    - cron: '0 */3 * * *'  # Se ejecuta cada 3 horas exactas
-  workflow_dispatch:
-
-jobs:
-  run-scanner:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clonar repositorio
-        uses: actions/checkout@v3
-
-      - name: Configurar Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Instalar dependencias
-        run: pip install requests
-
-      - name: Ejecutar script de análisis
-        env:
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}  # <--- Ojo aquí: en tu código python usas TELEGRAM_CHAT_ID, asegúrate de que coincida
-        run: python Bet_scanner.py
-
       - name: Guardar historial CSV en el repositorio
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.io"
-          git add historial_apuestas.csv
-          git diff --staged --quiet || git commit -m "Actualizar historial de apuestas CSV [skip ci]"
-          git push
+          if [ -f historial_apuestas.csv ]; then
+            git add historial_apuestas.csv
+            git diff --staged --quiet || git commit -m "Actualizar historial de apuestas CSV [skip ci]"
+            git push
+          else
+            echo "El archivo CSV aún no existe porque no ha habido apuestas, se omite el commit."
+          fi
