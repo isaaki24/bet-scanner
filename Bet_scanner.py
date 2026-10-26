@@ -4,6 +4,13 @@ import csv
 from datetime import datetime, timedelta
 import hashlib
 
+# --- PRUEBA DE FUEGO PARA LOS LOGS ---
+print("--- EL BOT ACABA DE ARRANCAR CORRECTAMENTE ---")
+print(f"API Key configurada: {'SÍ (Largo: ' + str(len(os.getenv('ODDS_API_KEY', ''))) + ')' if os.getenv('ODDS_API_KEY') else 'NO ESTÁ LLEGANDO'}")
+print(f"Token Telegram configurado: {'SÍ' if os.getenv('TELEGRAM_TOKEN') else 'NO ESTÁ LLEGANDO'}")
+print(f"Chat ID configurado: {'SÍ' if os.getenv('TELEGRAM_CHAT_ID') else 'NO ESTÁ LLEGANDO'}")
+
+
 # --- CONFIGURACIÓN DE CREDENCIALES Y PARÁMETROS ---
 API_KEY = os.getenv("ODDS_API_KEY", "0263d119deb33d2831893b185acf7b14")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8860037934:AAGerJjRrT_AD2yWp918_y5xCI8SNj3YPm4")
