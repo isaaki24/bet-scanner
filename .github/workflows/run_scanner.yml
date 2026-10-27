@@ -22,9 +22,9 @@ jobs:
 
       - name: Ejecutar script de análisis
         env:
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
+          ODDS_API_KEY: "0263d119deb33d2831893b185acf7b14"
+          TELEGRAM_TOKEN: "8860037934:AAGerJjRrT_AD2yWp918_y5xC-I8SNj3YPm4"
+          TELEGRAM_CHAT_ID: "5811357869"
         run: python Bet_scanner.py
 
       - name: Guardar historial CSV en el repositorio
