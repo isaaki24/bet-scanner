@@ -11,9 +11,9 @@ CHAT_ID = "5811357869"
 
 # --- PRUEBA DE FUEGO PARA LOS LOGS ---
 print("--- EL BOT ACABA DE ARRANCAR CORRECTAMENTE ---")
-print("API Key configurada: SÍ (Configurada estáticamente)")
-print("Token Telegram configurado: SÍ (Configurado estáticamente)")
-print("Chat ID configurado: SÍ (Configurado estáticamente)")
+print("API Key configurada: SÍ (Directa y lista)")
+print("Token Telegram configurado: SÍ (Directo y listo)")
+print("Chat ID configurado: SÍ (Directo y listo)")
 
 BANKROLL_TOTAL = 1000000  
 MIN_EV = 0.025            # Ajustado al 2.5% para mayor dinamismo
